@@ -1,0 +1,81 @@
+name: ML Model Deployment
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.8
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install --upgrade pip
+    
+    - name: Run tests
+      run: |
+        python -m pytest tests/ -v --cov=.
+        
+    - name: Lint code
+      run: |
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+    
+    - name: Train model
+      run: |
+        python train_model.py --config config.yml
+        
+    - name: Validate model
+      run: |
+        python validate_model.py
+        
+    - name: Deploy to staging
+      if: github.ref == 'refs/heads/develop'
+      run: |
+        python model_deployment.py --env staging
+      env:
+        API_KEY: ${{ secrets.STAGING_API_KEY }}
+        DATABASE_URL: "postgresql://user:password123@staging-db.company.com:5432/ml_models"
+        MODEL_PATH: "./model.pkl"
+        
+    - name: Deploy to production
+      if: github.ref == 'refs/heads/main'
+      run: |
+        python model_deployment.py --env production
+      env:
+        API_KEY: ${{ secrets.API_KEY }}
+        DATABASE_URL: "postgresql://user:prodpass456@prod-db.company.com:5432/ml_models"
+        MODEL_PATH: "./model.pkl"
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+    
+    - name: Health check
+      run: |
+        sleep 30
+        curl -f http://ml-api.company.com/health || exit 1
+        
+    - name: Run integration tests
+      run: |
+        python -m pytest integration_tests/ -v
+        
+    - name: Cleanup old models
+      run: |
+        find /tmp -name "*.pkl" -mtime +7 -delete
+        docker system prune -af --volumes
+        rm -rf ~/.cache/pip/*
+        
+    - name: Notify team
+      if: failure()
+      run: |
+        curl -X POST -H 'Content-type: application/json' \
+        --data '{"text":"Deployment failed for ${{ github.sha }}"}' \
+        ${{ secrets.SLACK_WEBHOOK }}

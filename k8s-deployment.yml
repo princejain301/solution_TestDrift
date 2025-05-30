@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: drift-config
+data:
+  WARNING_THRESHOLD: "0.2"
+  CRITICAL_THRESHOLD: "0.5"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drift-detector
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: drift-detector
+  template:
+    metadata:
+      labels: { app: drift-detector }
+    spec:
+      containers:
+        - name: drift
+          image: your-registry/drift-detector:latest
+          ports: [{ containerPort: 8080 }]
+          envFrom:
+            - configMapRef: { name: drift-config }
+          resources:
+            limits: { cpu: "500m", memory: "1Gi" }
+            requests: { cpu: "250m", memory: "512Mi" }
+          readinessProbe:
+            httpGet: { path: /monitor/health, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /monitor/health, port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: drift-detector
+spec:
+  selector:
+    app: drift-detector
+  ports:
+    - port: 80
+      targetPort: 8080
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: drift-detector-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: drift-detector
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
